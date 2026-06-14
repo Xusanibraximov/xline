@@ -22,12 +22,8 @@ from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     ContextTypes, JobQueue
 )
-from google.oauth2.credentials import Credentials
 from google.oauth2.service_account import Credentials as ServiceAccountCredentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
-import pickle
 
 # ═════════════════════════════════════════════
 # SETTINGS
@@ -62,25 +58,34 @@ TZ = pytz.timezone(TIMEZONE)
 # GOOGLE API
 # ═════════════════════════════════════════════
 
-def get_google_credentials() -> Optional[Credentials]:
-    """Google OAuth2 credentials."""
-    creds = None
-    if os.path.exists("token.pickle"):
-        with open("token.pickle", "rb") as token:
-            creds = pickle.load(token)
+def get_google_credentials():
+    """Google Service Account credentials.
     
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            if os.path.exists("credentials.json"):
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    "credentials.json", SCOPES
-                )
-                creds = flow.run_local_server(port=0)
-                with open("token.pickle", "wb") as token:
-                    pickle.dump(creds, token)
-    return creds
+    Railway uchun: CREDENTIALS_JSON env variable dan o'qiydi.
+    Local uchun: credentials.json faylidan o'qiydi.
+    """
+    try:
+        # Variant 1: Environment variable (Railway uchun)
+        creds_json = os.getenv("CREDENTIALS_JSON")
+        if creds_json:
+            creds_dict = json.loads(creds_json)
+            creds = ServiceAccountCredentials.from_service_account_info(
+                creds_dict, scopes=SCOPES
+            )
+            return creds
+        
+        # Variant 2: Local fayl (test uchun)
+        if os.path.exists("credentials.json"):
+            creds = ServiceAccountCredentials.from_service_account_file(
+                "credentials.json", scopes=SCOPES
+            )
+            return creds
+        
+        logger.error("Credentials topilmadi! CREDENTIALS_JSON yoki credentials.json kerak.")
+        return None
+    except Exception as e:
+        logger.error(f"Credentials xatosi: {e}")
+        return None
 
 
 def get_sheet_client():
@@ -101,6 +106,13 @@ def get_sheet_client():
 # GOOGLE SHEETS FUNCTIONS
 # ═════════════════════════════════════════════
 
+def clean_keys(row: Dict) -> Dict:
+    """Ustun nomlaridagi ortiqcha bo'sh joylarni olib tashlaydi.
+    Masalan: 'Javobgar ' -> 'Javobgar'
+    """
+    return {k.strip(): v for k, v in row.items()}
+
+
 def get_vazifalar(limit: int = 10) -> List[Dict]:
     """VAZIFALAR sheetdan bajarilmagan topshiriqlar."""
     try:
@@ -111,8 +123,11 @@ def get_vazifalar(limit: int = 10) -> List[Dict]:
         sheet = gc.open_by_key(SHEET_ID).worksheet("VAZIFALAR")
         data = sheet.get_all_records()
         
+        # Ustun nomlaridagi ortiqcha bo'sh joylarni tozalash
+        data = [clean_keys(row) for row in data]
+        
         # Filter: Bajarildi = ❌ Yo'q
-        pending = [t for t in data if t.get("Bajarildi", "") == "❌ Yo'q"]
+        pending = [t for t in data if "Yo'q" in str(t.get("Bajarildi", ""))]
         
         # Sort by deadline
         pending.sort(key=lambda x: x.get("Deadline", ""))
@@ -131,7 +146,7 @@ def get_video_production() -> List[Dict]:
             return []
         
         sheet = gc.open_by_key(SHEET_ID).worksheet("VIDEO ISHLAB CHIQARISH")
-        data = sheet.get_all_records()
+        data = [clean_keys(r) for r in sheet.get_all_records()]
         
         # Filter: Holat = 🔄 Jarayonda yoki ⏳ Kutilmoqda
         in_progress = [v for v in data if "🔄" in v.get("Holat", "") or "⏳" in v.get("Holat", "")]
@@ -150,7 +165,7 @@ def get_kontent_calendar() -> List[Dict]:
             return []
         
         sheet = gc.open_by_key(SHEET_ID).worksheet("KONTENT KALENDAR")
-        data = sheet.get_all_records()
+        data = [clean_keys(r) for r in sheet.get_all_records()]
         
         # Filter bugungi va yaqin (7 kun)
         today = date.today()
@@ -181,7 +196,7 @@ def get_mijozlar() -> List[Dict]:
             return []
         
         sheet = gc.open_by_key(SHEET_ID).worksheet("MIJOZLAR")
-        data = sheet.get_all_records()
+        data = [clean_keys(r) for r in sheet.get_all_records()]
         
         # Filter: Holat = ✅ Aktiv
         active = [m for m in data if m.get("Holat", "") == "✅ Aktiv"]
@@ -223,7 +238,7 @@ def update_task_status(task_id: str, status: str) -> bool:
             return False
         
         sheet = gc.open_by_key(SHEET_ID).worksheet("VAZIFALAR")
-        data = sheet.get_all_records()
+        data = [clean_keys(r) for r in sheet.get_all_records()]
         
         for i, row in enumerate(data, start=2):  # +2 (header + 1-index)
             if row.get("ID", "") == task_id:
