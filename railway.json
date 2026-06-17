@@ -5,8 +5,7 @@
   },
   "deploy": {
     "startCommand": "python bot_optimized.py",
-    "numReplicas": 1,
-    "restartPolicyMaxRetries": -1
+    "numReplicas": 1
   },
   "env": {
     "TELEGRAM_TOKEN": {
